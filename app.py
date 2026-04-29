@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 import google.generativeai as genai
-import time
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -15,24 +14,30 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.error("Missing Gemini API Key in Secrets!")
 
-# 1. CACHING 
+# 1. UPDATED AI LOGIC (Resolves 404/v1beta errors)
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
-    try:
-        # SWITCHED TO 1.5 FLASH: More stable for high-volume free-tier testing
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompts = {
-            "summary": f"Summarize these messages in 3 bullets: {text}",
-            "personality": f"Describe this sender's vibe in a witty way: {text}"
-        }
-        # Artificial 1-second delay to help respect Rate Limits
-        time.sleep(1) 
-        response = model.generate_content(prompts[prompt_type])
-        return response.text
-    except Exception as e:
-        return f"AI Error: {e}"
+    # Trying the most modern 2026 production names first
+    # Removing 'models/' prefix as it can cause 404s in some SDK versions
+    model_names = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
+    
+    prompts = {
+        "summary": f"Summarize these messages in 3 bullets: {text}",
+        "personality": f"Describe this sender's vibe in a witty way: {text}"
+    }
 
-# 2. PERMANENT LOGGING
+    for name in model_names:
+        try:
+            model = genai.GenerativeModel(name)
+            response = model.generate_content(prompts[prompt_type])
+            return response.text
+        except Exception as e:
+            # If the last model name in our list also fails, return the error
+            if name == model_names[-1]:
+                return f"AI Error: {e}"
+            continue # Try the next model name in the list
+
+# 2. LOGGING TO GOOGLE SHEETS
 def log_to_sheets(action, details=""):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
@@ -41,6 +46,7 @@ def log_to_sheets(action, details=""):
             "Action": action,
             "Details": str(details)
         }])
+        # ttl=0 is critical to avoid reading "cached" empty sheets
         existing = conn.read(ttl=0)
         updated = pd.concat([existing, new_row], ignore_index=True)
         conn.update(data=updated)
@@ -68,10 +74,10 @@ def parse_whatsapp(file_contents):
 st.title("📟 WhatsApp Intelligence AI")
 
 with st.sidebar:
-    if st.button("🔄 HARD REFRESH APP"):
+    if st.button("🔄 REBOOT & REFRESH"):
         st.cache_data.clear()
         st.rerun()
-    st.info("⚠️ **System Status:** Using Free Tier.")
+    st.info("⚠️ **System Status:** 2026 Production Tier.")
     st.markdown("---")
     sidebar_placeholder = st.empty()
 
@@ -81,7 +87,7 @@ if uploaded_file:
     file_bytes = uploaded_file.getvalue().decode("utf-8")
     df = parse_whatsapp(file_bytes)
     
-    log_to_sheets("File Upload", f"Analyzed chat with {len(df)} messages")
+    log_to_sheets("File Upload", f"Analyzed {len(df)} messages")
     
     tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Live Stats"])
 
@@ -101,9 +107,9 @@ if uploaded_file:
     with tab2:
         if st.button("✨ Summarize Latest"):
             log_to_sheets("AI Summary", f"Author: {sel_author}")
-            with st.spinner("Summarizing..."):
-                # Sending only 10 messages to keep token count very low
-                chat_snippet = " ".join(filtered['Message'].tail(10).astype(str))
+            with st.spinner("Analyzing..."):
+                # Sending 15 messages to stay under free-tier token limits
+                chat_snippet = " ".join(filtered['Message'].tail(15).astype(str))
                 st.info(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
@@ -111,10 +117,10 @@ if uploaded_file:
             if st.button(f"🧠 Analyze {sel_author}"):
                 log_to_sheets("Vibe Check", f"Target: {sel_author}")
                 with st.spinner("Decoding vibe..."):
-                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(15).astype(str))
+                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
-            st.info("Pick a person in the sidebar for a Vibe Check!")
+            st.info("Pick a specific person in the sidebar for a Vibe Check!")
 
     with tab4:
         st.subheader("Global Uptake Log")
@@ -126,4 +132,4 @@ if uploaded_file:
             activity_df = conn.read(ttl=0) 
             st.dataframe(activity_df.sort_values(by="Time", ascending=False), use_container_width=True)
         except Exception as e:
-            st.error(f"Sheet Error: {e}")
+            st.error(f"Sheet Display Error: {e}")
