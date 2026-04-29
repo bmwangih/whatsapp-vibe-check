@@ -18,7 +18,6 @@ else:
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
-        # UPDATED MODEL: Using the newest 2.0 Flash model to fix 404 errors
         model = genai.GenerativeModel("gemini-2.0-flash")
         prompts = {
             "summary": f"Summarize these messages in 3 bullets: {text}",
@@ -27,13 +26,7 @@ def get_ai_insight(text, prompt_type="summary"):
         response = model.generate_content(prompts[prompt_type])
         return response.text
     except Exception as e:
-        # If 2.0 isn't available yet in your region, fallback to 1.5 Pro
-        try:
-            model = genai.GenerativeModel("gemini-1.5-pro")
-            response = model.generate_content(prompts[prompt_type])
-            return response.text
-        except:
-            return f"AI Error: {e}"
+        return f"AI Error: {e}"
 
 # 2. PERMANENT LOGGING
 def log_to_sheets(action, details=""):
@@ -105,7 +98,8 @@ if uploaded_file:
         if st.button("✨ Summarize Latest"):
             log_to_sheets("AI Summary", f"Author: {sel_author}")
             with st.spinner("Summarizing..."):
-                chat_snippet = " ".join(filtered['Message'].tail(30).astype(str))
+                # REDUCED TO 15 MESSAGES to avoid 429 Quota errors on large files
+                chat_snippet = " ".join(filtered['Message'].tail(15).astype(str))
                 st.info(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
@@ -113,7 +107,8 @@ if uploaded_file:
             if st.button(f"🧠 Analyze {sel_author}"):
                 log_to_sheets("Vibe Check", f"Target: {sel_author}")
                 with st.spinner("Decoding vibe..."):
-                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(40).astype(str))
+                    # REDUCED TO 20 MESSAGES for safety
+                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
             st.info("Pick a person in the sidebar for a Vibe Check!")
