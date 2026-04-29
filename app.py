@@ -19,13 +19,12 @@ else:
 # 1. VISITOR GEOLOCATION (Country Only)
 def get_visitor_country():
     try:
-        # Free API to get general country location
         response = requests.get('http://ip-api.com/json/', timeout=2)
         return response.json().get('country', 'Unknown')
     except:
         return "Unknown"
 
-# 2. PRIVATE LOGGING (No personal details)
+# 2. PRIVATE LOGGING
 def log_to_sheets(action):
     try:
         country = get_visitor_country()
@@ -41,16 +40,17 @@ def log_to_sheets(action):
     except:
         pass 
 
-# 3. AI LOGIC (Updated to 20 messages & Confirmed Model)
+# 3. AI LOGIC (Updated to 20 messages)
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
+        # Using the model ID confirmed in your previous logs
         model = genai.GenerativeModel("gemini-2.5-flash") 
         prompts = {
             "summary": f"Summarize these messages in 3-5 clear bullets: {text}",
             "personality": f"Analyze the tone and personality of this sender: {text}"
         }
-        time.sleep(1) # Safety delay for free tier
+        time.sleep(1) 
         response = model.generate_content(prompts[prompt_type])
         return response.text
     except Exception as e:
@@ -83,7 +83,7 @@ with st.sidebar:
     st.info("Analyzing latest 20 messages for accuracy.")
     sidebar_placeholder = st.empty()
     st.markdown("---")
-    # Secret Admin Section
+    # Admin input
     admin_key = st.text_input("Admin Access", type="password", help="Enter password to view logs")
 
 uploaded_file = st.file_uploader("Upload Chat Export (.txt)", type="txt")
@@ -92,14 +92,12 @@ if uploaded_file:
     file_bytes = uploaded_file.getvalue().decode("utf-8")
     df = parse_whatsapp(file_bytes)
     
-    # Track file upload country (no details)
     log_to_sheets("File Uploaded")
     
-    # Primary Navigation
     tab1, tab2, tab3 = st.tabs(["💬 Chat Feed", "🤖 AI Summary", "🧠 Personality Check"])
 
     authors = sorted(df['Author'].unique().tolist())
-    sel_author = sidebar_placeholder.selectbox("Select Person to Analyze", ["Group Conversation"] + authors)
+    sel_author = sidebar_placeholder.selectbox("Select Person", ["Group Conversation"] + authors)
     
     filtered = df.copy()
     if sel_author != "Group Conversation":
@@ -107,32 +105,30 @@ if uploaded_file:
 
     with tab1:
         st.metric("Messages Found", len(filtered))
-        # Showing the last 20 for visual context
         for idx, row in filtered.tail(20).iterrows():
             with st.chat_message("user" if row['Author'] == sel_author else "assistant"):
                 st.write(f"**{row['Author']}**: {row['Message']}")
 
     with tab2:
-        st.subheader("AI Insight")
         if st.button("Generate Summary"):
-            log_to_sheets("Summary Generated")
-            with st.spinner("Processing 20 messages..."):
+            log_to_sheets("AI Summary Requested")
+            with st.spinner("Analyzing 20 messages..."):
                 chat_snippet = " ".join(filtered['Message'].tail(20).astype(str))
                 st.markdown(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
         if sel_author != "Group Conversation":
-            st.subheader(f"Vibe Analysis: {sel_author}")
             if st.button(f"Analyze {sel_author}"):
-                log_to_sheets("Personality Check")
-                with st.spinner("Analyzing style..."):
+                log_to_sheets("Personality Check Requested")
+                with st.spinner("Decoding vibe..."):
                     vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
-            st.warning("Please select a specific person in the sidebar for a Personality Check.")
+            st.warning("Please select a specific person for Personality Check.")
 
-# --- PRIVATE ADMIN VIEW ---
-if admin_key == "admin123": # Change this to your preferred password
+# --- SECURE ADMIN VIEW ---
+# This checks the password against your Streamlit Secrets
+if "ADMIN_PASSWORD" in st.secrets and admin_key == st.secrets["ADMIN_PASSWORD"]:
     st.markdown("---")
     st.subheader("🛡️ Internal Usage Log (Admin Only)")
     try:
@@ -140,4 +136,4 @@ if admin_key == "admin123": # Change this to your preferred password
         activity_df = conn.read(ttl=0) 
         st.dataframe(activity_df.sort_values(by="Time", ascending=False), use_container_width=True)
     except Exception as e:
-        st.error(f"Log Retrieval Error: {e}")
+        st.error(f"Log Error: {e}")
