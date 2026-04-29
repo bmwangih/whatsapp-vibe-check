@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import google.generativeai as genai
 import time
+import requests
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -15,31 +16,24 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.error("Missing Gemini API Key in Secrets!")
 
-# 1. UPDATED AI LOGIC (Using your confirmed Model IDs)
-@st.cache_data(show_spinner=False, ttl=3600)
-def get_ai_insight(text, prompt_type="summary"):
+# 1. VISITOR GEOLOCATION (Country Only)
+def get_visitor_country():
     try:
-        # Use the ID confirmed in your screenshot
-        model = genai.GenerativeModel("gemini-2.5-flash") 
-        prompts = {
-            "summary": f"Summarize these messages in 3 bullets: {text}",
-            "personality": f"Describe this sender's vibe in a witty way: {text}"
-        }
-        # Small delay to prevent hitting free-tier rate limits too fast
-        time.sleep(1) 
-        response = model.generate_content(prompts[prompt_type])
-        return response.text
-    except Exception as e:
-        return f"AI Error: {e}"
+        # Free API to get general country location
+        response = requests.get('http://ip-api.com/json/', timeout=2)
+        return response.json().get('country', 'Unknown')
+    except:
+        return "Unknown"
 
-# 2. PERMANENT LOGGING
-def log_to_sheets(action, details=""):
+# 2. PRIVATE LOGGING (No personal details)
+def log_to_sheets(action):
     try:
+        country = get_visitor_country()
         conn = st.connection("gsheets", type=GSheetsConnection)
         new_row = pd.DataFrame([{
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Action": action,
-            "Details": str(details)
+            "Location": country
         }])
         existing = conn.read(ttl=0)
         updated = pd.concat([existing, new_row], ignore_index=True)
@@ -47,33 +41,50 @@ def log_to_sheets(action, details=""):
     except:
         pass 
 
+# 3. AI LOGIC (Updated to 20 messages & Confirmed Model)
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_ai_insight(text, prompt_type="summary"):
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash") 
+        prompts = {
+            "summary": f"Summarize these messages in 3-5 clear bullets: {text}",
+            "personality": f"Analyze the tone and personality of this sender: {text}"
+        }
+        time.sleep(1) # Safety delay for free tier
+        response = model.generate_content(prompts[prompt_type])
+        return response.text
+    except Exception as e:
+        if "429" in str(e):
+            return "⚠️ System Busy (Quota Limit). Please wait 30 seconds and try again."
+        return f"AI Error: {e}"
+
 def parse_whatsapp(file_contents):
     pattern = r'^(\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2})\s-\s(.*?):\s(.*)'
     data = []
     lines = file_contents.split('\n')
-    current_date, current_author, current_msg = None, None, ""
+    current_author = None
     for line in lines:
         match = re.match(pattern, line)
         if match:
-            if current_author:
-                data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
             current_date, current_author, current_msg = match.groups()
+            data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
         elif current_author:
-            current_msg += " " + line.strip()
-    if current_author:
-        data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
+            data[-1]["Message"] += " " + line.strip()
     return pd.DataFrame(data)
 
-# --- UI ---
+# --- UI LOGIC ---
 st.title("📟 WhatsApp Intelligence AI")
 
 with st.sidebar:
-    if st.button("🔄 HARD REFRESH APP"):
+    st.header("Settings")
+    if st.button("🔄 Clear Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.info("⚠️ **System Status:** Using Free Tier (Gemini 2.5 Flash).")
-    st.markdown("---")
+    st.info("Analyzing latest 20 messages for accuracy.")
     sidebar_placeholder = st.empty()
+    st.markdown("---")
+    # Secret Admin Section
+    admin_key = st.text_input("Admin Access", type="password", help="Enter password to view logs")
 
 uploaded_file = st.file_uploader("Upload Chat Export (.txt)", type="txt")
 
@@ -81,49 +92,52 @@ if uploaded_file:
     file_bytes = uploaded_file.getvalue().decode("utf-8")
     df = parse_whatsapp(file_bytes)
     
-    log_to_sheets("File Upload", f"Analyzed {len(df)} messages")
+    # Track file upload country (no details)
+    log_to_sheets("File Uploaded")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Live Stats"])
+    # Primary Navigation
+    tab1, tab2, tab3 = st.tabs(["💬 Chat Feed", "🤖 AI Summary", "🧠 Personality Check"])
 
     authors = sorted(df['Author'].unique().tolist())
-    sel_author = sidebar_placeholder.selectbox("Select Person", ["All Authors"] + authors)
+    sel_author = sidebar_placeholder.selectbox("Select Person to Analyze", ["Group Conversation"] + authors)
     
     filtered = df.copy()
-    if sel_author != "All Authors":
+    if sel_author != "Group Conversation":
         filtered = filtered[filtered['Author'] == sel_author]
 
     with tab1:
-        st.metric("Total Messages", len(filtered))
+        st.metric("Messages Found", len(filtered))
+        # Showing the last 20 for visual context
         for idx, row in filtered.tail(20).iterrows():
             with st.chat_message("user" if row['Author'] == sel_author else "assistant"):
                 st.write(f"**{row['Author']}**: {row['Message']}")
 
     with tab2:
-        if st.button("✨ Summarize Latest"):
-            log_to_sheets("AI Summary", f"Author: {sel_author}")
-            with st.spinner("Analyzing..."):
-                # Use a small snippet (10 messages) to avoid 429 quota errors
-                chat_snippet = " ".join(filtered['Message'].tail(10).astype(str))
-                st.info(get_ai_insight(chat_snippet, "summary"))
+        st.subheader("AI Insight")
+        if st.button("Generate Summary"):
+            log_to_sheets("Summary Generated")
+            with st.spinner("Processing 20 messages..."):
+                chat_snippet = " ".join(filtered['Message'].tail(20).astype(str))
+                st.markdown(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
-        if sel_author != "All Authors":
-            if st.button(f"🧠 Analyze {sel_author}"):
-                log_to_sheets("Vibe Check", f"Target: {sel_author}")
-                with st.spinner("Decoding vibe..."):
-                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(15).astype(str))
+        if sel_author != "Group Conversation":
+            st.subheader(f"Vibe Analysis: {sel_author}")
+            if st.button(f"Analyze {sel_author}"):
+                log_to_sheets("Personality Check")
+                with st.spinner("Analyzing style..."):
+                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
-            st.info("Pick a person in the sidebar for a Vibe Check!")
+            st.warning("Please select a specific person in the sidebar for a Personality Check.")
 
-    with tab4:
-        st.subheader("Global Uptake Log")
-        if st.button("📊 Update Table"):
-            st.cache_data.clear()
-            
-        try:
-            conn = st.connection("gsheets", type=GSheetsConnection)
-            activity_df = conn.read(ttl=0) 
-            st.dataframe(activity_df.sort_values(by="Time", ascending=False), use_container_width=True)
-        except Exception as e:
-            st.error(f"Sheet Error: {e}")
+# --- PRIVATE ADMIN VIEW ---
+if admin_key == "admin123": # Change this to your preferred password
+    st.markdown("---")
+    st.subheader("🛡️ Internal Usage Log (Admin Only)")
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        activity_df = conn.read(ttl=0) 
+        st.dataframe(activity_df.sort_values(by="Time", ascending=False), use_container_width=True)
+    except Exception as e:
+        st.error(f"Log Retrieval Error: {e}")
