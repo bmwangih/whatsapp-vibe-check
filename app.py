@@ -16,16 +16,15 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.error("Missing Gemini API Key in Secrets!")
 
-# 1. VISITOR GEOLOCATION (Country Only for Privacy)
+# 1. VISITOR GEOLOCATION
 def get_visitor_country():
     try:
-        # Pings a free API to get the visitor's country based on IP
         response = requests.get('http://ip-api.com/json/', timeout=2)
         return response.json().get('country', 'Unknown')
     except:
         return "Unknown"
 
-# 2. PRIVATE LOGGING (Anonymized)
+# 2. PRIVATE LOGGING
 def log_to_sheets(action):
     try:
         country = get_visitor_country()
@@ -35,24 +34,21 @@ def log_to_sheets(action):
             "Action": action,
             "Location": country
         }])
-        # ttl=0 ensures we don't read a cached/stale version of the logs
         existing = conn.read(ttl=0)
         updated = pd.concat([existing, new_row], ignore_index=True)
         conn.update(data=updated)
     except:
         pass 
 
-# 3. AI LOGIC (Optimized for 20 messages & Quota Protection)
+# 3. AI LOGIC (20 Messages)
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
-        # Initializing the confirmed Gemini 2.5 Flash model
         model = genai.GenerativeModel("gemini-2.5-flash") 
         prompts = {
             "summary": f"Summarize these messages in 3-5 clear bullets: {text}",
             "personality": f"Analyze the tone and personality of this sender: {text}"
         }
-        # Artificial delay to respect free-tier Rate Limits (429 errors)
         time.sleep(1.5) 
         response = model.generate_content(prompts[prompt_type])
         return response.text
@@ -62,7 +58,6 @@ def get_ai_insight(text, prompt_type="summary"):
         return f"AI Error: {e}"
 
 def parse_whatsapp(file_contents):
-    # Regex to match WhatsApp message headers
     pattern = r'^(\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2})\s-\s(.*?):\s(.*)'
     data = []
     lines = file_contents.split('\n')
@@ -73,11 +68,10 @@ def parse_whatsapp(file_contents):
             current_date, current_author, current_msg = match.groups()
             data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
         elif current_author:
-            # Append multi-line messages to the last entry
             data[-1]["Message"] += " " + line.strip()
     return pd.DataFrame(data)
 
-# --- UI NAVIGATION ---
+# --- UI LOGIC ---
 st.title("📟 WhatsApp Intelligence AI")
 
 with st.sidebar:
@@ -85,26 +79,19 @@ with st.sidebar:
     if st.button("🔄 Clear App Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.info("Analysis depth: Latest 20 messages.")
     sidebar_placeholder = st.empty()
     st.markdown("---")
-    # Admin Input with Masked Typing
-    admin_key = st.text_input("Admin Access", type="password", help="Enter secret code to view uptake logs")
+    # Admin Input
+    admin_key = st.text_input("Admin Access", type="password")
 
 uploaded_file = st.file_uploader("Upload WhatsApp Chat Export (.txt)", type="txt")
 
 if uploaded_file:
-    # Read and Parse the File
     file_bytes = uploaded_file.getvalue().decode("utf-8")
     df = parse_whatsapp(file_bytes)
-    
-    # Log the event privately
     log_to_sheets("File Uploaded")
     
-    # Primary Application Tabs
     tab1, tab2, tab3 = st.tabs(["💬 Chat Feed", "🤖 AI Summary", "🧠 Vibe Check"])
-
-    # Author Selection
     authors = sorted(df['Author'].unique().tolist())
     sel_author = sidebar_placeholder.selectbox("Select Target", ["Group Conversation"] + authors)
     
@@ -113,33 +100,30 @@ if uploaded_file:
         filtered = filtered[filtered['Author'] == sel_author]
 
     with tab1:
-        st.metric("Total Messages Processed", len(filtered))
-        # Displaying the tail for immediate visual confirmation
+        st.metric("Total Messages", len(filtered))
         for idx, row in filtered.tail(20).iterrows():
             with st.chat_message("user" if row['Author'] == sel_author else "assistant"):
                 st.write(f"**{row['Author']}**: {row['Message']}")
 
     with tab2:
-        st.subheader("Automated Summary")
         if st.button("Generate Summary"):
             log_to_sheets("Summary Requested")
-            with st.spinner("AI is reading the last 20 messages..."):
+            with st.spinner("AI is analyzing..."):
                 chat_snippet = " ".join(filtered['Message'].tail(20).astype(str))
                 st.markdown(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
         if sel_author != "Group Conversation":
-            st.subheader(f"Personality Analysis: {sel_author}")
             if st.button(f"Analyze {sel_author}"):
                 log_to_sheets("Personality Check Requested")
-                with st.spinner("Decoding communication style..."):
+                with st.spinner("Decoding vibe..."):
                     vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
-            st.warning("Select a specific person in the sidebar for a Personality Check.")
+            st.warning("Select a specific person for Personality Check.")
 
-# --- SECURE ADMIN LOGS ---
-# Using str() comparison to fix the '198306' integer/string mismatch
+# --- SECURE ADMIN VIEW ---
+# Checking if key exists and converting both to string for a perfect match
 if "ADMIN_PASSWORD" in st.secrets:
     if str(admin_key) == str(st.secrets["ADMIN_PASSWORD"]):
         st.markdown("---")
