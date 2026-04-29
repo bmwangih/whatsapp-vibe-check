@@ -3,49 +3,45 @@ import pandas as pd
 import re
 import google.generativeai as genai
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIG & STYLING ---
+# --- CONFIG ---
 st.set_page_config(page_title="WhatsApp Intel AI", layout="wide")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #0E1117; color: #FFFFFF; }
-    [data-testid="stMetricValue"] { color: #00FFAA; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { 
-        height: 50px; background-color: #1E2130; 
-        border-radius: 10px; color: white; padding: 10px 20px;
-    }
-    .stTabs [aria-selected="true"] { background-color: #00FFAA !important; color: #0E1117 !important; }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- SECURE AI SETUP ---
+# --- SECURE SETUP ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.error("API Key not found! Please set GEMINI_API_KEY in Streamlit Secrets.")
+    st.error("Missing Gemini API Key in Secrets!")
 
+# 1. CACHING (Prevents 429 Quota errors for repeat clicks)
+@st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        selected_model = "models/gemini-1.5-flash-latest" if "models/gemini-1.5-flash-latest" in available_models else available_models[0]
-        model = genai.GenerativeModel(selected_model)
-        
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
         prompts = {
-            "summary": f"Summarize the main topics of these messages in 3 bullets: {text}",
-            "personality": f"Describe this sender's vibe in a witty, youthful way based on these: {text}"
+            "summary": f"Summarize these messages in 3 bullets: {text}",
+            "personality": f"Describe this sender's vibe in a witty way: {text}"
         }
         response = model.generate_content(prompts[prompt_type])
         return response.text
     except Exception as e:
         return f"AI Error: {e}"
 
-def log_activity(action, details=""):
-    if "activity_log" not in st.session_state:
-        st.session_state.activity_log = []
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state.activity_log.append({"Time": timestamp, "Action": action, "Details": details})
+# 2. PERMANENT LOGGING (Writes to your Google Sheet)
+def log_to_sheets(action, details=""):
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        new_row = pd.DataFrame([{
+            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Action": action,
+            "Details": str(details)
+        }])
+        existing = conn.read()
+        updated = pd.concat([existing, new_row], ignore_index=True)
+        conn.update(data=updated)
+    except:
+        pass 
 
 def parse_whatsapp(file_contents):
     pattern = r'^(\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2})\s-\s(.*?):\s(.*)'
@@ -64,47 +60,53 @@ def parse_whatsapp(file_contents):
     if current_author: data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
     return pd.DataFrame(data)
 
+# --- UI ---
 st.title("📟 WhatsApp Intelligence AI")
+
+with st.sidebar:
+    st.info("⚠️ **System Status:** Using Free Tier. If you see a '429 Quota' error, please wait 60 seconds.")
+    st.markdown("---")
 
 uploaded_file = st.file_uploader("Upload Chat Export (.txt)", type="txt")
 
 if uploaded_file:
     df = parse_whatsapp(uploaded_file.getvalue().decode("utf-8"))
-    log_activity("File Upload", f"{len(df)} messages processed")
+    log_to_sheets("File Upload", f"Analyzed chat with {len(df)} messages")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Stats"])
+    tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Live Stats"])
 
-    st.sidebar.header("Control Panel")
     authors = sorted(df['Author'].unique().tolist())
-    sel_author = st.sidebar.selectbox("Select Person", ["All"] + authors)
+    sel_author = st.sidebar.selectbox("Select Person", ["All Authors"] + authors)
     
     filtered = df.copy()
-    if sel_author != "All": filtered = filtered[filtered['Author'] == sel_author]
+    if sel_author != "All Authors": filtered = filtered[filtered['Author'] == sel_author]
 
     with tab1:
         st.metric("Total Messages", len(filtered))
-        for idx, row in filtered.tail(30).iterrows():
+        for idx, row in filtered.tail(20).iterrows():
             with st.chat_message("user" if row['Author'] == sel_author else "assistant"):
                 st.write(f"**{row['Author']}**: {row['Message']}")
 
     with tab2:
         if st.button("✨ Summarize Latest"):
-            log_activity("AI Summary", f"Author: {sel_author}")
-            with st.spinner("Reading the room..."):
+            log_to_sheets("AI Summary", f"Author: {sel_author}")
+            with st.spinner("Summarizing..."):
                 st.info(get_ai_insight(" ".join(filtered['Message'].tail(30).astype(str))))
 
     with tab3:
-        if sel_author != "All":
+        if sel_author != "All Authors":
             if st.button(f"🧠 Analyze {sel_author}"):
-                log_activity("Vibe Check", f"Target: {sel_author}")
-                with st.spinner("Decoding personality..."):
+                log_to_sheets("Vibe Check", f"Target: {sel_author}")
+                with st.spinner("Decoding vibe..."):
                     st.success(get_ai_insight(" ".join(df[df['Author'] == sel_author]['Message'].tail(40).astype(str)), "personality"))
         else:
-            st.info("Pick a person in the sidebar to run a Vibe Check!")
+            st.info("Pick a specific person in the sidebar for a Vibe Check!")
 
     with tab4:
-        st.subheader("Uptake & Activity")
-        if "activity_log" in st.session_state:
-            st.table(pd.DataFrame(st.session_state.activity_log))
-        else:
-            st.write("No activity recorded yet.")
+        st.subheader("Global Uptake Log")
+        try:
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            activity_df = conn.read()
+            st.dataframe(activity_df.sort_values(by="Time", ascending=False), use_container_width=True)
+        except:
+            st.write("Connect your Google Sheet in Secrets to see live activity.")
