@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import google.generativeai as genai
+import time
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -18,11 +19,14 @@ else:
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        # SWITCHED TO 1.5 FLASH: More stable for high-volume free-tier testing
+        model = genai.GenerativeModel("gemini-1.5-flash")
         prompts = {
             "summary": f"Summarize these messages in 3 bullets: {text}",
             "personality": f"Describe this sender's vibe in a witty way: {text}"
         }
+        # Artificial 1-second delay to help respect Rate Limits
+        time.sleep(1) 
         response = model.generate_content(prompts[prompt_type])
         return response.text
     except Exception as e:
@@ -98,8 +102,8 @@ if uploaded_file:
         if st.button("✨ Summarize Latest"):
             log_to_sheets("AI Summary", f"Author: {sel_author}")
             with st.spinner("Summarizing..."):
-                # REDUCED TO 15 MESSAGES to avoid 429 Quota errors on large files
-                chat_snippet = " ".join(filtered['Message'].tail(15).astype(str))
+                # Sending only 10 messages to keep token count very low
+                chat_snippet = " ".join(filtered['Message'].tail(10).astype(str))
                 st.info(get_ai_insight(chat_snippet, "summary"))
 
     with tab3:
@@ -107,8 +111,7 @@ if uploaded_file:
             if st.button(f"🧠 Analyze {sel_author}"):
                 log_to_sheets("Vibe Check", f"Target: {sel_author}")
                 with st.spinner("Decoding vibe..."):
-                    # REDUCED TO 20 MESSAGES for safety
-                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(20).astype(str))
+                    vibe_snippet = " ".join(df[df['Author'] == sel_author]['Message'].tail(15).astype(str))
                     st.success(get_ai_insight(vibe_snippet, "personality"))
         else:
             st.info("Pick a person in the sidebar for a Vibe Check!")
