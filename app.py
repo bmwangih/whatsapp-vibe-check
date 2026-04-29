@@ -7,7 +7,6 @@ from datetime import datetime
 # --- CONFIG & STYLING ---
 st.set_page_config(page_title="WhatsApp Intel AI", layout="wide")
 
-# Custom CSS for a modern "Neon/Dark" look
 st.markdown("""
     <style>
     .stApp { background-color: #0E1117; color: #FFFFFF; }
@@ -22,7 +21,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- SECURE AI SETUP ---
-# On Streamlit Cloud, this looks for a secret named 'GEMINI_API_KEY'
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
@@ -43,16 +41,12 @@ def get_ai_insight(text, prompt_type="summary"):
     except Exception as e:
         return f"AI Error: {e}"
 
-# --- ACTIVITY LOGGING ---
 def log_activity(action, details=""):
-    """Logs simple usage data to the app session for tracking uptake."""
     if "activity_log" not in st.session_state:
         st.session_state.activity_log = []
-    
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.activity_log.append({"Time": timestamp, "Action": action, "Details": details})
 
-# --- DATA PARSING ---
 def parse_whatsapp(file_contents):
     pattern = r'^(\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2})\s-\s(.*?):\s(.*)'
     data = []
@@ -70,7 +64,6 @@ def parse_whatsapp(file_contents):
     if current_author: data.append({"DateTime": current_date, "Author": current_author, "Message": current_msg})
     return pd.DataFrame(data)
 
-# --- APP UI ---
 st.title("📟 WhatsApp Intelligence AI")
 
 uploaded_file = st.file_uploader("Upload Chat Export (.txt)", type="txt")
@@ -81,7 +74,6 @@ if uploaded_file:
     
     tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Stats"])
 
-    # Sidebar Filters
     st.sidebar.header("Control Panel")
     authors = sorted(df['Author'].unique().tolist())
     sel_author = st.sidebar.selectbox("Select Person", ["All"] + authors)
