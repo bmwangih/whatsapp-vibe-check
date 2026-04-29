@@ -1,6 +1,3 @@
-### Step 2: The Full Code (`app.py`)
-This version is "Cloud-Ready." It looks for your API key in Streamlit's secure storage instead of asking you to type it every time.
-```python
 import streamlit as st
 import pandas as pd
 import re
