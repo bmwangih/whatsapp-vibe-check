@@ -18,8 +18,8 @@ else:
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_ai_insight(text, prompt_type="summary"):
     try:
-        # Switching to 'gemini-pro' as it is the most stable name across all API versions
-        model = genai.GenerativeModel("gemini-pro")
+        # UPDATED MODEL: Using the newest 2.0 Flash model to fix 404 errors
+        model = genai.GenerativeModel("gemini-2.0-flash")
         prompts = {
             "summary": f"Summarize these messages in 3 bullets: {text}",
             "personality": f"Describe this sender's vibe in a witty way: {text}"
@@ -27,7 +27,13 @@ def get_ai_insight(text, prompt_type="summary"):
         response = model.generate_content(prompts[prompt_type])
         return response.text
     except Exception as e:
-        return f"AI Error: {e}"
+        # If 2.0 isn't available yet in your region, fallback to 1.5 Pro
+        try:
+            model = genai.GenerativeModel("gemini-1.5-pro")
+            response = model.generate_content(prompts[prompt_type])
+            return response.text
+        except:
+            return f"AI Error: {e}"
 
 # 2. PERMANENT LOGGING
 def log_to_sheets(action, details=""):
@@ -64,7 +70,6 @@ def parse_whatsapp(file_contents):
 # --- UI ---
 st.title("📟 WhatsApp Intelligence AI")
 
-# FORCE REFRESH BUTTON AT TOP OF SIDEBAR
 with st.sidebar:
     if st.button("🔄 HARD REFRESH APP"):
         st.cache_data.clear()
@@ -79,7 +84,6 @@ if uploaded_file:
     file_bytes = uploaded_file.getvalue().decode("utf-8")
     df = parse_whatsapp(file_bytes)
     
-    # Log the event
     log_to_sheets("File Upload", f"Analyzed chat with {len(df)} messages")
     
     tab1, tab2, tab3, tab4 = st.tabs(["💬 Feed", "🤖 Summary", "🧠 Vibe Check", "📈 Live Stats"])
@@ -116,7 +120,6 @@ if uploaded_file:
 
     with tab4:
         st.subheader("Global Uptake Log")
-        # Refresh button directly inside the tab
         if st.button("📊 Update Table"):
             st.cache_data.clear()
             
